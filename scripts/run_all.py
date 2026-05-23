@@ -48,6 +48,8 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=None, help="Override training epochs")
     p.add_argument("--model", default="condetection",
                    help="Model for CV (condetection/aasist/lcnn/rawnet2)")
+    p.add_argument("--resume", action="store_true",
+                   help="Resume training from existing checkpoint if present")
     return p.parse_args()
 
 
@@ -82,6 +84,8 @@ def main():
     train_cmd = [PYTHON, "scripts/train.py", "--config", cfg]
     if args.epochs:
         train_cmd += ["--epochs", str(args.epochs)]
+    if args.resume:
+        train_cmd += ["--resume", str(Path(ROOT / "results/checkpoints/checkpoint_best.pth"))]
     if not run_step("Train ConDetection-DANN", train_cmd):
         sys.exit(1)
 

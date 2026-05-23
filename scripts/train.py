@@ -40,6 +40,7 @@ def parse_args():
     p.add_argument("--itw-root", default=None, help="Override ITW dataset root")
     p.add_argument("--output-dir", default=None, help="Override output directory")
     p.add_argument("--no-dann", action="store_true", help="Disable DANN")
+    p.add_argument("--resume", default=None, help="Resume from checkpoint_best.pth path")
     return p.parse_args()
 
 
@@ -109,14 +110,38 @@ def main():
     scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
     scaler = GradScaler(device.type, enabled=(device.type == "cuda"))
 
-    # ─── Training loop ───
-    history = []
+    # ─── Resume from checkpoint ───
+    start_epoch = 1
     best_eer = 1.0
     best_threshold = 0.5
     patience_cnt = 0
+
+    if args.resume:
+        ckpt_path = Path(args.resume)
+        if not ckpt_path.exists():
+            # Auto-locate checkpoint_best.pth in default dir
+            ckpt_path = Path(cfg.paths.checkpoint_dir) / "checkpoint_best.pth"
+        if ckpt_path.exists():
+            print(f"Resuming from {ckpt_path}")
+            ckpt = torch.load(str(ckpt_path), map_location=device, weights_only=True)
+            m_inner = model.module if hasattr(model, "module") else model
+            m_inner.load_state_dict(ckpt["model_state_dict"])
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+            if ckpt.get("scaler_state_dict") is not None:
+                scaler.load_state_dict(ckpt["scaler_state_dict"])
+            start_epoch = int(ckpt["epoch"]) + 1
+            best_eer = float(ckpt["best_val_eer"])
+            best_threshold = float(ckpt["best_threshold"])
+            print(f"  Resumed at epoch {start_epoch} | best EER so far: {best_eer:.4f}")
+        else:
+            print(f"Warning: checkpoint not found at {ckpt_path} — starting from scratch")
+
+    # ─── Training loop ───
+    history = []
     t0 = perf_counter()
 
-    for epoch in range(1, cfg.training.epochs + 1):
+    for epoch in range(start_epoch, cfg.training.epochs + 1):
         ep_t0 = perf_counter()
         itw_iter = iter(itw_train_loader) if itw_train_loader else None
 
