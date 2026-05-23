@@ -34,6 +34,17 @@ def mcnemar_test(y_true: np.ndarray, preds_a: np.ndarray, preds_b: np.ndarray) -
     n10 = int(((correct_a == 1) & (correct_b == 0)).sum())  # A right, B wrong
     n11 = int(((correct_a == 1) & (correct_b == 1)).sum())
 
+    # Identical classifiers: n01=n10=0 → trivially not significant
+    if n01 + n10 == 0:
+        return {
+            "chi2": 0.0,
+            "p_value": 1.0,
+            "significant": False,
+            "n01": n01,
+            "n10": n10,
+            "table": np.array([[n11, 0], [0, n00]]),
+        }
+
     table = np.array([[n11, n10], [n01, n00]])
     result = mcnemar(table, exact=False, correction=True)
 
