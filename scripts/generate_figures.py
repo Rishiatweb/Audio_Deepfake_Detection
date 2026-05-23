@@ -7,7 +7,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-import numpy as np
 import pandas as pd
 import torch
 
@@ -15,10 +14,11 @@ from src.config import load_config
 from src.data.datasets import build_splits, make_loaders
 from src.models.factory import get_model
 from src.training.losses import build_criterion
-from src.training.trainer import evaluate, find_best_threshold
+from src.training.trainer import evaluate
 from src.visualization.figures import (
     plot_ablation_chart,
     plot_confusion_matrices,
+    plot_cross_scale_attention_heatmap,
     plot_generalization_gap,
     plot_roc_curves,
     plot_score_distributions,
@@ -51,7 +51,7 @@ def main():
     if Path(history_path).exists():
         history = pd.read_csv(history_path).to_dict("records")
         plot_training_curves(history, f"{fig_dir}/training_curves.png")
-        print(f"Saved training_curves.png")
+        print("Saved training_curves.png")
 
     # ─── Model evaluation figures ───
     ckpt_path = args.ckpt or f"{cfg.paths.checkpoint_dir}/model_best.pt"
@@ -83,6 +83,20 @@ def main():
         plot_score_distributions(results, f"{fig_dir}/score_distributions.png")
         print("Saved ROC, confusion matrices, score distributions.")
 
+        # Cross-scale attention heatmap
+        try:
+            m_inner = model.module if hasattr(model, "module") else model
+            attn_w = getattr(m_inner, "_last_attn_weights", None)
+            if attn_w is not None:
+                plot_cross_scale_attention_heatmap(
+                    attn_w,
+                    [mc.name for mc in cfg.mel_configs],
+                    f"{fig_dir}/attention_heatmap.png",
+                )
+                print("Saved attention_heatmap.png")
+        except Exception as e:
+            print(f"Attention heatmap skipped: {e}")
+
         # t-SNE (optional, slow)
         if args.tsne:
             try:
@@ -104,8 +118,8 @@ def main():
 
         # Grad-CAM
         try:
-            from src.visualization.gradcam import compute_gradcam, plot_gradcam
             from src.data.spectrograms import make_multires_logmels
+            from src.visualization.gradcam import compute_gradcam, plot_gradcam
 
             batch_wavs, _ = next(iter(for_test_loader))
             batch_wavs = batch_wavs[:3].to(device)

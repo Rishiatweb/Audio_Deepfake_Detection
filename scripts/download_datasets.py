@@ -45,7 +45,7 @@ def download_for(data_dir: Path) -> None:
     else:
         print("Downloading FoR dataset from Kaggle (~17 GB)...")
         import subprocess
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, "-m", "kaggle", "datasets", "download",
              "-d", "mohammedabdeldayem/the-fake-or-real-dataset",
              "-p", str(out)],
@@ -240,7 +240,7 @@ def update_config_paths(data_dir: Path) -> None:
         else:
             new_lines.append(line)
     config_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-    print(f"Updated configs/default.yaml:")
+    print("Updated configs/default.yaml:")
     print(f"  for_base: {for_path}")
     print(f"  itw_root: {itw_path}")
 

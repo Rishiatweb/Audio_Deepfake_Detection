@@ -13,8 +13,8 @@ from src.config import load_config
 from src.data.datasets import FastAudioDataset, build_splits, make_loaders
 from src.evaluation.comparative import run_comparative_study
 from src.models.factory import get_model
-from src.training.trainer import find_best_threshold, evaluate
 from src.training.losses import build_criterion
+from src.training.trainer import evaluate, find_best_threshold
 
 
 def parse_args():
@@ -22,6 +22,7 @@ def parse_args():
     p.add_argument("--config", default="configs/default.yaml")
     p.add_argument("--condetection-ckpt", default=None, help="Pre-trained ConDetection checkpoint (.pt)")
     p.add_argument("--models", nargs="+", default=None, help="Subset of models to run")
+    p.add_argument("--include-sklearn", action="store_true", help="Include LR + RF sklearn baselines")
     p.add_argument("--output", default=None, help="Output CSV path for results table")
     return p.parse_args()
 
@@ -58,6 +59,16 @@ def main():
         print(f"Loaded ConDetection checkpoint: {args.condetection_ckpt}")
         print(f"  Val EER={val_m['EER']:.4f} | AUC={val_m['AUC']:.4f} | threshold={cd_threshold:.3f}")
 
+    model_names = args.models
+    if args.include_sklearn and model_names is None:
+        from src.evaluation.comparative import BASELINE_MODELS, SKLEARN_MODELS
+        model_names = ["condetection"] + BASELINE_MODELS + SKLEARN_MODELS
+    elif args.include_sklearn and model_names is not None:
+        from src.evaluation.comparative import SKLEARN_MODELS
+        for sk in SKLEARN_MODELS:
+            if sk not in model_names:
+                model_names = list(model_names) + [sk]
+
     df = run_comparative_study(
         cfg=cfg,
         train_loader=train_loader,
@@ -68,7 +79,7 @@ def main():
         condetection_model=cd_model,
         condetection_threshold=cd_threshold,
         itw_train_loader=itw_train_loader,
-        model_names=args.models,
+        model_names=model_names,
     )
 
     out_path = args.output or f"{cfg.paths.tables_dir}/comparative_results.csv"

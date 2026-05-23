@@ -18,13 +18,14 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from src.config import load_config
 from src.data.datasets import FastAudioDataset, build_splits, make_loaders
+from src.data.spectrograms import make_multires_logmels
 from src.models.factory import count_parameters, get_model
 from src.training.losses import build_criterion, dann_lambda_schedule
 from src.training.scheduler import get_cosine_schedule_with_warmup
 from src.training.trainer import (
     evaluate,
     evaluate_tta,
-    find_best_threshold,
+    kfold_calibrate_threshold,
     save_checkpoint,
     train_one_epoch,
 )
@@ -128,7 +129,7 @@ def main():
         auc = val_raw.get("AUC")
         val_thr = 0.5
         if auc is not None and auc == auc:
-            val_thr, _ = find_best_threshold(val_raw["y_true"], val_raw["y_score"])
+            val_thr = kfold_calibrate_threshold(val_raw["y_true"], val_raw["y_score"])
 
         val_m = evaluate(model, val_loader, criterion, device, cfg, threshold=val_thr, max_steps=cfg.training.max_val_steps)
         eer = val_m["EER"]
@@ -189,6 +190,57 @@ def main():
     print(f"  ITW       | EER={itw_m['EER']:.4f} | AUC={itw_m['AUC']:.4f} | F1={itw_m['F1']:.4f}")
     if for_m["EER"] == for_m["EER"] and itw_m["EER"] == itw_m["EER"]:
         print(f"  Gen Gap   | ΔEER={itw_m['EER'] - for_m['EER']:.4f}")
+
+    # ─── DANN domain discriminator accuracy analysis ───
+    if cfg.dann.enabled and hasattr(model.module if hasattr(model, "module") else model, "domain_disc"):
+        print("\nDANN Domain Discriminator Accuracy Analysis...")
+        m_inner = model.module if hasattr(model, "module") else model
+        m_inner._dann_lambda = 0.0  # Disable GRL at eval — measure raw discriminator
+        model.eval()
+
+        @torch.no_grad()
+        def collect_domain_preds(loader, domain_lbl, n_max=400):
+            preds, labels = [], []
+            count = 0
+            for wavs, _ in loader:
+                wavs = wavs.to(device)
+                mels = make_multires_logmels(wavs, cfg.mel_configs, cfg.audio.sample_rate, train_mode=False)
+                embeddings = []
+                for mel, enc in zip(mels, m_inner.scale_encoders):
+                    x = enc(mel)
+                    for i, blk in enumerate(m_inner.conformer):
+                        x = blk(x)
+                        if i in m_inner.pool_positions:
+                            x = m_inner._pool_time(x)
+                    embeddings.append(x.mean(dim=1))
+                fused, _ = m_inner.cross_scale(embeddings)
+                dom_logit = m_inner.domain_disc.net(fused).squeeze(-1)
+                dom_pred = (torch.sigmoid(dom_logit) >= 0.5).cpu().numpy().astype(int)
+                preds.extend(dom_pred.tolist())
+                labels.extend([domain_lbl] * len(dom_pred))
+                count += len(dom_pred)
+                if count >= n_max:
+                    break
+            return preds, labels
+
+        for_preds, for_lbls = collect_domain_preds(for_test_loader, 0)
+        itw_preds, itw_lbls = collect_domain_preds(itw_loader, 1)
+        all_preds = np.array(for_preds + itw_preds)
+        all_lbls = np.array(for_lbls + itw_lbls)
+        from sklearn.metrics import accuracy_score as _acc
+        dom_acc = _acc(all_lbls, all_preds)
+        # Distance from chance (0.5) is the true measure — closer to 0 = better
+        dom_confusion = abs(dom_acc - 0.5)
+        print(f"\nDomain discriminator accuracy: {dom_acc:.4f}")
+        print(f"  Distance from chance (0.5):  {dom_confusion:.4f}  (lower = more domain-invariant)")
+        print("  0.50 = fully confused = DANN working perfectly (ideal)")
+        print("  1.00 or 0.00 = systematic bias = DANN not working")
+        if dom_confusion < 0.10:
+            print("  EXCELLENT: Near-chance discrimination — domain-invariant features achieved")
+        elif dom_confusion < 0.25:
+            print("  GOOD: Partial domain invariance")
+        else:
+            print("  WEAK: Consider increasing lambda_max or more epochs")
 
 
 if __name__ == "__main__":

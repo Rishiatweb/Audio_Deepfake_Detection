@@ -165,7 +165,7 @@ def main() -> None:
 
     total = sum(f.stat().st_size for f in (out).rglob("*.wav"))
     print(f"\nDone. Total size: {total / 1e6:.1f} MB")
-    print(f"\nSet in configs/default.yaml:")
+    print("\nSet in configs/default.yaml:")
     print(f"  for_base: {(out / 'for-dataset').resolve()}")
     print(f"  itw_root: {(out / 'in-the-wild').resolve()}")
 

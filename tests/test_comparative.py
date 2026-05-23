@@ -131,3 +131,42 @@ def test_all_baselines_output_same_batch_size(cfg, dummy_mels):
         with torch.no_grad():
             logits, _, _ = model(dummy_mels)
         assert logits.shape[0] == B, f"{name} batch size mismatch"
+
+
+# ─── Sklearn baseline unit tests ─────────────────────────────────────────────
+
+
+def test_sklearn_lr_fit_predict():
+    """LogisticRegression fits on dummy mel features and produces valid probabilities."""
+    from sklearn.linear_model import LogisticRegression
+
+    rng = np.random.RandomState(0)
+    X = rng.randn(80, 160).astype(np.float32)
+    y = rng.randint(0, 2, 80)
+    clf = LogisticRegression(max_iter=200, random_state=0)
+    clf.fit(X, y)
+    proba = clf.predict_proba(X)[:, 1]
+    assert proba.shape == (80,)
+    assert np.all((proba >= 0.0) & (proba <= 1.0))
+
+
+def test_sklearn_rf_fit_predict():
+    """RandomForestClassifier fits on dummy mel features and produces valid probabilities."""
+    from sklearn.ensemble import RandomForestClassifier
+
+    rng = np.random.RandomState(1)
+    X = rng.randn(80, 160).astype(np.float32)
+    y = rng.randint(0, 2, 80)
+    clf = RandomForestClassifier(n_estimators=10, random_state=1)
+    clf.fit(X, y)
+    proba = clf.predict_proba(X)[:, 1]
+    assert proba.shape == (80,)
+    assert np.all((proba >= 0.0) & (proba <= 1.0))
+
+
+def test_sklearn_models_in_comparative_constants():
+    """SKLEARN_MODELS constant is defined in comparative module."""
+    from src.evaluation.comparative import SKLEARN_MODELS
+
+    assert "lr" in SKLEARN_MODELS
+    assert "rf" in SKLEARN_MODELS

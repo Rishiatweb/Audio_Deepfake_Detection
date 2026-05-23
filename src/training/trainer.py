@@ -49,6 +49,35 @@ def find_best_threshold(y_true: np.ndarray, y_score: np.ndarray) -> tuple[float,
     return best_t, best_obj
 
 
+def kfold_calibrate_threshold(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    n_folds: int = 5,
+) -> float:
+    """K-fold threshold calibration — more robust than single-pass grid search.
+
+    Splits (y_true, y_score) into n_folds stratified folds, finds the best
+    threshold on each fold's held-out slice, returns the mean. Reduces
+    overfitting to a single validation split.
+    """
+    from sklearn.model_selection import StratifiedKFold
+
+    if len(y_true) == 0 or np.unique(y_true).size < 2:
+        return 0.5
+    # n_folds cannot exceed smallest class count
+    min_class = int(np.bincount(y_true.astype(int)).min())
+    n_folds = min(n_folds, min_class)
+    if n_folds < 2:
+        t, _ = find_best_threshold(y_true, y_score)
+        return t
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    thresholds: list[float] = []
+    for _, val_idx in skf.split(y_score, y_true.astype(int)):
+        t, _ = find_best_threshold(y_true[val_idx], y_score[val_idx])
+        thresholds.append(t)
+    return float(np.mean(thresholds))
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -66,6 +95,8 @@ def train_one_epoch(
     total_loss = 0.0
     total_cls = 0.0
     total_dann = 0.0
+    total_disc_correct = 0
+    total_disc_samples = 0
     amp_enabled = device.type == "cuda"
     tr = cfg.training
     n_batches = len(loader) if tr.max_train_steps is None else min(len(loader), tr.max_train_steps)
@@ -143,12 +174,25 @@ def train_one_epoch(
         total_dann += dann_loss.detach().float().item() if torch.is_tensor(dann_loss) else float(dann_loss)
         steps_done += 1
 
+        # Track domain discriminator accuracy (target: ~0.5 = confused)
+        if cfg.dann.enabled and src_domain_logits is not None and dann_lam > 0:
+            with torch.no_grad():
+                src_pred = (src_domain_logits.detach().sigmoid() > 0.5).float()
+                src_gt = (src_domain > 0.5).float()
+                total_disc_correct += (src_pred == src_gt).sum().item()
+                total_disc_samples += src_domain_logits.size(0)
+
         if step % 50 == 0 or step == n_batches:
+            disc_acc_str = ""
+            if total_disc_samples > 0:
+                disc_acc = total_disc_correct / total_disc_samples
+                disc_acc_str = f" | disc_acc {disc_acc:.3f}"
             print(
                 f"  step {step}/{n_batches} | "
                 f"cls {total_cls / steps_done:.4f} | "
                 f"dann {total_dann / steps_done:.4f} | "
-                f"dann_lam {dann_lam:.3f} | "
+                f"dann_lam {dann_lam:.3f}"
+                f"{disc_acc_str} | "
                 f"total {total_loss / steps_done:.4f}"
             )
 

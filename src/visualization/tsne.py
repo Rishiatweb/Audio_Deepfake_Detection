@@ -95,11 +95,11 @@ def plot_tsne_domains(
     domain_labels = np.array([0] * n_for + [1] * n_itw)
 
     print("  Fitting t-SNE for DANN model...")
-    tsne = TSNE(n_components=2, perplexity=40, n_iter=1000, random_state=42)
+    tsne = TSNE(n_components=2, perplexity=40, max_iter=1000, random_state=42)
     z_dann = tsne.fit_transform(all_dann)
 
     print("  Fitting t-SNE for no-DANN model...")
-    tsne = TSNE(n_components=2, perplexity=40, n_iter=1000, random_state=42)
+    tsne = TSNE(n_components=2, perplexity=40, max_iter=1000, random_state=42)
     z_nodann = tsne.fit_transform(all_nodann)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))

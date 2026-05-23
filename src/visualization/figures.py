@@ -212,6 +212,45 @@ def plot_score_distributions(
         _save(fig, out_path)
 
 
+def plot_cross_scale_attention_heatmap(
+    attn_weights,
+    scale_names: list[str],
+    out_path: str,
+    title: str = "Cross-Scale Attention Weights",
+) -> None:
+    """Visualise CrossScaleAttentionFusion weights as a heatmap.
+
+    attn_weights: (B, K, K) or (K, K) tensor or ndarray — output of
+    CrossScaleAttentionFusion, averaged over batch if 3-D.
+    Rows = query scales, columns = key scales.
+    """
+    if hasattr(attn_weights, "detach"):
+        attn_weights = attn_weights.detach().cpu().numpy()
+    attn = np.asarray(attn_weights, dtype=np.float32)
+    if attn.ndim == 3:
+        attn = attn.mean(axis=0)
+
+    with plt.rc_context(STYLE):
+        fig, ax = plt.subplots(figsize=(5, 4))
+        im = ax.imshow(attn, cmap="Blues", vmin=0.0, aspect="auto")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        ax.set_xticks(range(len(scale_names)))
+        ax.set_yticks(range(len(scale_names)))
+        ax.set_xticklabels(scale_names)
+        ax.set_yticklabels(scale_names)
+        ax.set_xlabel("Key Scale")
+        ax.set_ylabel("Query Scale")
+        ax.set_title(title, fontweight="bold")
+        thresh = attn.max() * 0.6 if attn.max() > 0 else 1.0
+        for i in range(len(scale_names)):
+            for j in range(len(scale_names)):
+                color = "white" if attn[i, j] > thresh else "black"
+                ax.text(j, i, f"{attn[i, j]:.3f}", ha="center", va="center",
+                        fontsize=9, color=color)
+        fig.tight_layout()
+        _save(fig, out_path)
+
+
 def plot_generalization_gap(
     model_results: dict[str, tuple[float, float]],
     out_path: str,
