@@ -38,6 +38,7 @@ def run_step(name: str, cmd: list[str], skip: bool = False) -> bool:
 def parse_args():
     p = argparse.ArgumentParser(description="Run full ConDetection-DANN experiment pipeline")
     p.add_argument("--config", default="configs/default.yaml", help="YAML config path")
+    p.add_argument("--skip-train", action="store_true", help="Skip training (use existing checkpoint)")
     p.add_argument("--skip-comparison", action="store_true", help="Skip SOTA comparative study")
     p.add_argument("--skip-ablation", action="store_true", help="Skip ablation study")
     p.add_argument("--skip-cv", action="store_true", help="Skip k-fold CV (slow: 5×10 epochs)")
@@ -46,6 +47,7 @@ def parse_args():
                    help="Include LR + RF baselines in comparative study")
     p.add_argument("--tsne", action="store_true", help="Generate t-SNE figures (very slow)")
     p.add_argument("--epochs", type=int, default=None, help="Override training epochs")
+    p.add_argument("--comparison-epochs", type=int, default=None, help="Override epochs for baseline comparison training")
     p.add_argument("--model", default="condetection",
                    help="Model for CV (condetection/aasist/lcnn/rawnet2)")
     p.add_argument("--resume", action="store_true",
@@ -68,6 +70,8 @@ def main():
     print("  ConDetection-DANN — Full Experiment Pipeline")
     print("=" * 65)
     skips = []
+    if args.skip_train:
+        skips.append("train")
     if args.skip_comparison:
         skips.append("comparison")
     if args.skip_ablation:
@@ -86,7 +90,7 @@ def main():
         train_cmd += ["--epochs", str(args.epochs)]
     if args.resume:
         train_cmd += ["--resume", str(Path(ROOT / "results/checkpoints/checkpoint_best.pth"))]
-    if not run_step("Train ConDetection-DANN", train_cmd):
+    if not run_step("Train ConDetection-DANN", train_cmd, skip=args.skip_train):
         sys.exit(1)
 
     # ── Step 2: SOTA Comparative Study ────────────────────────────────────────
@@ -98,6 +102,8 @@ def main():
     ]
     if args.include_sklearn:
         comp_cmd.append("--include-sklearn")
+    if args.comparison_epochs:
+        comp_cmd += ["--epochs", str(args.comparison_epochs)]
     if not run_step("SOTA Comparative Study", comp_cmd, skip=args.skip_comparison):
         sys.exit(1)
 

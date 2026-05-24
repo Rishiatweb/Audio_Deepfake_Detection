@@ -155,10 +155,35 @@ def train_model(
     device: torch.device,
     itw_train_loader: DataLoader | None = None,
 ) -> tuple[nn.Module, float, float]:
-    """Train a model from scratch and return (model, best_eer, best_threshold)."""
-    print(f"\nTraining {model_name.upper()} from scratch...")
+    """Train a model from scratch and return (model, best_eer, best_threshold).
+
+    If a checkpoint already exists at results/checkpoints/<model>/model_best.pt,
+    loads it and skips training.
+    """
+    ckpt_path = Path(cfg.paths.checkpoint_dir) / model_name / "model_best.pt"
     model = get_model(model_name, cfg).to(device)
     print(f"  Parameters: {count_parameters(model)['trainable']:,}")
+
+    if ckpt_path.exists():
+        print(f"\nFound existing checkpoint for {model_name.upper()} — skipping training.")
+        m_inner = model.module if hasattr(model, "module") else model
+        m_inner.load_state_dict(torch.load(str(ckpt_path), map_location=device, weights_only=True))
+        return model, 0.0, 0.5
+
+    print(f"\nTraining {model_name.upper()} from scratch...")
+
+    # RawNet2 (22M params) needs smaller batch to fit 6GB VRAM
+    _SMALL_BATCH_MODELS = {"rawnet2"}
+    if model_name in _SMALL_BATCH_MODELS:
+        small_bs = 4
+        train_loader = torch.utils.data.DataLoader(
+            train_loader.dataset,
+            batch_size=small_bs,
+            shuffle=True,
+            num_workers=0,
+            drop_last=True,
+        )
+        print(f"  Reduced batch size to {small_bs} for VRAM headroom")
 
     n_real = sum(1 for lbl in train_loader.dataset.labels if lbl == 0.0)  # type: ignore[attr-defined]
     n_fake = sum(1 for lbl in train_loader.dataset.labels if lbl == 1.0)  # type: ignore[attr-defined]
@@ -175,6 +200,10 @@ def train_model(
     best_threshold = 0.5
     patience_cnt = 0
 
+    # RawNet2: batch=4 + grad_accum=4 → effective batch=16, same quality as batch=16
+    _ACCUM_MAP = {"rawnet2": 4}
+    grad_accum = _ACCUM_MAP.get(model_name, 1)
+
     # DANN only for ConDetection; baselines train without domain adversarial loss
     use_dann_save = cfg.dann.enabled
     if model_name != "condetection":
@@ -183,7 +212,7 @@ def train_model(
     try:
         for epoch in range(1, cfg.training.epochs + 1):
             itw_iter = iter(itw_train_loader) if (itw_train_loader and cfg.dann.enabled) else None
-            train_one_epoch(model, train_loader, optimizer, scheduler, scaler, criterion, device, cfg, epoch, itw_iter)
+            train_one_epoch(model, train_loader, optimizer, scheduler, scaler, criterion, device, cfg, epoch, itw_iter, grad_accum=grad_accum)
 
             max_val = cfg.training.max_val_steps
             val_raw = evaluate(model, val_loader, criterion, device, cfg, threshold=0.5, max_steps=max_val)
@@ -273,24 +302,34 @@ def run_comparative_study(
             cd_model, _, cd_threshold = train_model(
                 "condetection", cfg, train_loader, val_loader, device, itw_train_loader
             )
+        cd_model.cpu()  # offload to CPU — free VRAM for baselines
         all_models["condetection"] = (cd_model, 0.0, cd_threshold)
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # Train each neural baseline
     for name in neural_names:
         if name == "condetection":
             continue
         model, best_eer, threshold = train_model(name, cfg, train_loader, val_loader, device)
+        model.cpu()  # offload immediately after training
         all_models[name] = (model, best_eer, threshold)
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    # Evaluate all models
+    # Evaluate all models (one at a time on GPU)
     for name, (model, _, threshold) in all_models.items():
         print(f"\nEvaluating {name.upper()}...")
+        model.to(device)
         for_m = evaluate(model, for_test_loader, criterion, device, cfg, threshold=threshold)
         itw_m = evaluate(model, itw_loader, criterion, device, cfg, threshold=threshold)
         params = count_parameters(model)
+        model.cpu()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         gen_gap = float("nan")
         if for_m["EER"] == for_m["EER"] and itw_m["EER"] == itw_m["EER"]:

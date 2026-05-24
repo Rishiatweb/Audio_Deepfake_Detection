@@ -24,6 +24,7 @@ def parse_args():
     p.add_argument("--models", nargs="+", default=None, help="Subset of models to run")
     p.add_argument("--include-sklearn", action="store_true", help="Include LR + RF sklearn baselines")
     p.add_argument("--output", default=None, help="Output CSV path for results table")
+    p.add_argument("--epochs", type=int, default=None, help="Override epochs for baseline training")
     return p.parse_args()
 
 
@@ -31,6 +32,8 @@ def main():
     args = parse_args()
     cfg = load_config(args.config)
     cfg.make_dirs()
+    if args.epochs is not None:
+        cfg.training.epochs = args.epochs
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")

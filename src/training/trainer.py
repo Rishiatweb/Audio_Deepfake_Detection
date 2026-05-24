@@ -89,6 +89,7 @@ def train_one_epoch(
     cfg: Config,
     epoch: int,
     itw_loader_iter=None,
+    grad_accum: int = 1,
 ) -> float:
     """Train for one epoch. Returns mean total loss."""
     model.train()
@@ -114,8 +115,15 @@ def train_one_epoch(
     for step, (waveforms, labels) in enumerate(loader, 1):
         waveforms = waveforms.to(device, non_blocking=True)
         labels_gpu = label_smooth(labels.to(device, non_blocking=True), tr.label_smooth)
-        mels_list = make_multires_logmels(waveforms, cfg.mel_configs, cfg.audio.sample_rate, train_mode=True)
         src_domain = build_dann_domain_labels(waveforms.size(0), is_source=True, device=device)
+
+        m_inner_fwd = model.module if hasattr(model, "module") else model
+        is_rawnet = hasattr(m_inner_fwd, "sinc")
+        mels_list = (
+            [] if is_rawnet
+            else make_multires_logmels(waveforms, cfg.mel_configs, cfg.audio.sample_rate, train_mode=True)
+        )
+        model_input = [waveforms.unsqueeze(1)] if is_rawnet else mels_list
 
         tgt_wavs = None
         if cfg.dann.enabled and itw_loader_iter is not None and dann_lam > 0:
@@ -124,9 +132,15 @@ def train_one_epoch(
             except StopIteration:
                 tgt_wavs = None
 
-        optimizer.zero_grad(set_to_none=True)
+        if steps_done % grad_accum == 0:
+            optimizer.zero_grad(set_to_none=True)
         with autocast(device_type=device.type, enabled=amp_enabled):
-            logits, cembs, src_domain_logits = model(mels_list, domain_labels=src_domain)
+            if hasattr(m_inner_fwd, "domain_disc"):
+                logits, cembs, src_domain_logits = model(model_input, domain_labels=src_domain)
+            else:
+                out = model(model_input)
+                logits = out[0] if isinstance(out, (tuple, list)) else out
+                cembs, src_domain_logits = [], None
             cls_loss = criterion(logits, labels_gpu)
 
             c_loss = (
@@ -156,18 +170,19 @@ def train_one_epoch(
             if torch.is_tensor(dann_loss) and not bool(torch.isfinite(dann_loss).all()):
                 dann_loss = torch.zeros((), device=device)
 
-            loss = cls_loss + tr.lambda_c * c_loss + cfg.diffusion.lambda_diff * d_diff + dann_loss
+            loss = (cls_loss + tr.lambda_c * c_loss + cfg.diffusion.lambda_diff * d_diff + dann_loss) / grad_accum
 
         if not torch.isfinite(loss):
             optimizer.zero_grad(set_to_none=True)
             continue
 
         scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
-        scheduler.step()
+        if (steps_done + 1) % grad_accum == 0 or (steps_done + 1) == n_batches:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
 
         total_loss += loss.detach().float().item()
         total_cls += cls_loss.detach().float().item()
@@ -230,9 +245,12 @@ def evaluate(
         waveforms = waveforms.to(device, non_blocking=True)
         labels_d = labels.to(device, non_blocking=True)
         mels_list = make_multires_logmels(waveforms, cfg.mel_configs, cfg.audio.sample_rate, train_mode=False)
+        _m = model.module if hasattr(model, "module") else model
+        model_input = [waveforms.unsqueeze(1)] if hasattr(_m, "sinc") else mels_list
 
         with autocast(device_type=device.type, enabled=amp_enabled):
-            logits, _, _ = model(mels_list)
+            out = model(model_input)
+            logits = out[0] if isinstance(out, (tuple, list)) else out
             loss = criterion(logits, label_smooth(labels_d, cfg.training.label_smooth))
 
         total_loss += loss.detach().float().item()
@@ -307,13 +325,16 @@ def evaluate_tta(
         waveforms = waveforms.to(device, non_blocking=True)
         labels_d = labels.to(device, non_blocking=True)
 
+        _m_tta = model.module if hasattr(model, "module") else model
         score_sum = None
         first_logits = None
         for sh in tta_shifts:
             wf = waveforms if int(sh) == 0 else torch.roll(waveforms, shifts=int(sh), dims=1)
             mels_list = make_multires_logmels(wf, cfg.mel_configs, cfg.audio.sample_rate, train_mode=False)
+            model_input = [wf.unsqueeze(1)] if hasattr(_m_tta, "sinc") else mels_list
             with autocast(device_type=device.type, enabled=amp_enabled):
-                logits, _, _ = model(mels_list)
+                out = model(model_input)
+                logits = out[0] if isinstance(out, (tuple, list)) else out
             if first_logits is None:
                 first_logits = logits
             probs = torch.sigmoid(logits)
