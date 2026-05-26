@@ -19,7 +19,7 @@ def parse_args():
     p.add_argument(
         "--model",
         default="condetection",
-        help="Model name (condetection/aasist/lcnn/rawnet2)",
+        help="Model name (condetection/aasist/lcnn)",
     )
     p.add_argument("--output", default=None, help="Output CSV path for fold results")
     return p.parse_args()

@@ -90,8 +90,13 @@ def train_one_epoch(
     epoch: int,
     itw_loader_iter=None,
     grad_accum: int = 1,
-) -> float:
-    """Train for one epoch. Returns mean total loss."""
+) -> tuple[float, float]:
+    """Train for one epoch. Returns (mean_total_loss, disc_acc).
+
+    disc_acc: domain discriminator accuracy on source-domain samples this epoch.
+    Target is 0.5 (discriminator at chance = domain-invariant features).
+    Returns float('nan') when DANN is disabled or warmup not yet reached.
+    """
     model.train()
     total_loss = 0.0
     total_cls = 0.0
@@ -118,12 +123,8 @@ def train_one_epoch(
         src_domain = build_dann_domain_labels(waveforms.size(0), is_source=True, device=device)
 
         m_inner_fwd = model.module if hasattr(model, "module") else model
-        is_rawnet = hasattr(m_inner_fwd, "sinc")
-        mels_list = (
-            [] if is_rawnet
-            else make_multires_logmels(waveforms, cfg.mel_configs, cfg.audio.sample_rate, train_mode=True)
-        )
-        model_input = [waveforms.unsqueeze(1)] if is_rawnet else mels_list
+        mels_list = make_multires_logmels(waveforms, cfg.mel_configs, cfg.audio.sample_rate, train_mode=True)
+        model_input = mels_list
 
         tgt_wavs = None
         if cfg.dann.enabled and itw_loader_iter is not None and dann_lam > 0:
@@ -220,7 +221,8 @@ def train_one_epoch(
         if tr.max_train_steps is not None and step >= tr.max_train_steps:
             break
 
-    return total_loss / max(steps_done, 1)
+    disc_acc = total_disc_correct / total_disc_samples if total_disc_samples > 0 else float("nan")
+    return total_loss / max(steps_done, 1), disc_acc
 
 
 @torch.no_grad()
@@ -245,8 +247,7 @@ def evaluate(
         waveforms = waveforms.to(device, non_blocking=True)
         labels_d = labels.to(device, non_blocking=True)
         mels_list = make_multires_logmels(waveforms, cfg.mel_configs, cfg.audio.sample_rate, train_mode=False)
-        _m = model.module if hasattr(model, "module") else model
-        model_input = [waveforms.unsqueeze(1)] if hasattr(_m, "sinc") else mels_list
+        model_input = mels_list
 
         with autocast(device_type=device.type, enabled=amp_enabled):
             out = model(model_input)
@@ -325,13 +326,12 @@ def evaluate_tta(
         waveforms = waveforms.to(device, non_blocking=True)
         labels_d = labels.to(device, non_blocking=True)
 
-        _m_tta = model.module if hasattr(model, "module") else model
         score_sum = None
         first_logits = None
         for sh in tta_shifts:
             wf = waveforms if int(sh) == 0 else torch.roll(waveforms, shifts=int(sh), dims=1)
             mels_list = make_multires_logmels(wf, cfg.mel_configs, cfg.audio.sample_rate, train_mode=False)
-            model_input = [wf.unsqueeze(1)] if hasattr(_m_tta, "sinc") else mels_list
+            model_input = mels_list
             with autocast(device_type=device.type, enabled=amp_enabled):
                 out = model(model_input)
                 logits = out[0] if isinstance(out, (tuple, list)) else out

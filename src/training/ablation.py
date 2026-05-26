@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -58,7 +60,11 @@ ABLATION_CONFIGS: list[AblationConfig] = [
 def apply_overrides(cfg: Config, overrides: dict) -> Config:
     """Apply dot-path overrides to a copy of config."""
     cfg = copy.deepcopy(cfg)
+    _SPECIAL_KEYS = {"mel_configs"}  # handled separately below
+
     for key, value in overrides.items():
+        if key in _SPECIAL_KEYS:
+            continue
         parts = key.split(".")
         obj = cfg
         for part in parts[:-1]:
@@ -67,7 +73,7 @@ def apply_overrides(cfg: Config, overrides: dict) -> Config:
 
     # Special override: single mid-scale only
     if overrides.get("mel_configs") == "mid_only":
-        cfg.mel_configs = [cfg.mel_configs[1]]  # keep only mid
+        cfg.mel_configs = [cfg.mel_configs[1]]  # keep only mid-resolution mel config
 
     return cfg
 
@@ -88,6 +94,20 @@ def run_ablation_experiment(
     print("=" * 60)
 
     cfg = apply_overrides(base_cfg, ablation.config_overrides)
+    ckpt_dir = Path(cfg.paths.checkpoint_dir) / f"ablation_{ablation.name}"
+    ckpt_path = ckpt_dir / "model_best.pt"
+    results_cache = ckpt_dir / "eval_results.json"
+
+    # Check cache BEFORE building model (avoid wasting VRAM on cached variants)
+    if ckpt_path.exists() and results_cache.exists():
+        print("  Found existing checkpoint — skipping training.")
+        with open(results_cache) as f:
+            cached = json.load(f)
+        # Backfill disc_acc fields missing from old cached results
+        for field in ("disc_acc_final", "disc_acc_mean", "disc_acc_deviation"):
+            cached.setdefault(field, float("nan"))
+        return cached
+
     model = get_model("condetection", cfg).to(device)
 
     n_real = sum(1 for lbl in train_loader.dataset.labels if lbl == 0.0)  # type: ignore[attr-defined]
@@ -104,10 +124,12 @@ def run_ablation_experiment(
     best_eer = 1.0
     best_threshold = 0.5
     patience_cnt = 0
+    disc_acc_history: list[float] = []  # per-epoch disc_acc (NaN when DANN inactive)
 
     for epoch in range(1, cfg.training.epochs + 1):
         itw_iter = iter(itw_train_loader) if (itw_train_loader and cfg.dann.enabled) else None
-        train_one_epoch(model, train_loader, optimizer, scheduler, scaler, criterion, device, cfg, epoch, itw_iter)
+        _, disc_acc = train_one_epoch(model, train_loader, optimizer, scheduler, scaler, criterion, device, cfg, epoch, itw_iter)
+        disc_acc_history.append(disc_acc)
 
         max_val = cfg.training.max_val_steps
         val_raw = evaluate(model, val_loader, criterion, device, cfg, threshold=0.5, max_steps=max_val)
@@ -137,16 +159,23 @@ def run_ablation_experiment(
             else:
                 patience_cnt += 1
 
-        print(f"  Ep {epoch:02d} | val EER={eer:.4f} | AUC={val_m['AUC']:.4f}")
+        disc_str = f" | disc_acc={disc_acc:.3f} (|dev|={abs(disc_acc - 0.5):.3f})" if not np.isnan(disc_acc) else ""
+        print(f"  Ep {epoch:02d} | val EER={eer:.4f} | AUC={val_m['AUC']:.4f}{disc_str}")
         if patience_cnt >= cfg.training.patience:
             print("  Early stopping.")
             break
+
+    # Summarise disc_acc across training run
+    valid_disc = [d for d in disc_acc_history if not np.isnan(d)]
+    disc_acc_final = valid_disc[-1] if valid_disc else float("nan")
+    disc_acc_mean = float(np.mean(valid_disc)) if valid_disc else float("nan")
+    disc_acc_deviation = abs(disc_acc_final - 0.5) if not np.isnan(disc_acc_final) else float("nan")
 
     # Final evaluation with best threshold
     for_m = evaluate(model, for_test_loader, criterion, device, cfg, threshold=best_threshold)
     itw_m = evaluate(model, itw_loader, criterion, device, cfg, threshold=best_threshold)
 
-    return {
+    result = {
         "name": ablation.name,
         "description": ablation.description,
         "for_eer": for_m["EER"],
@@ -158,7 +187,18 @@ def run_ablation_experiment(
         "gen_gap_eer": (
             itw_m["EER"] - for_m["EER"] if not any(np.isnan(v) for v in [for_m["EER"], itw_m["EER"]]) else float("nan")
         ),
+        # Domain discriminator accuracy (DANN effectiveness metric)
+        # Target: 0.5 — discriminator at chance = domain-invariant features learned
+        # NaN for no_dann variant (discriminator disabled)
+        "disc_acc_final": disc_acc_final,
+        "disc_acc_mean": disc_acc_mean,
+        "disc_acc_deviation": disc_acc_deviation,  # |final - 0.5|, lower = better DANN
     }
+    # Cache eval results so reruns skip this variant
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    with open(results_cache, "w") as f:
+        json.dump(result, f)
+    return result
 
 
 def run_all_ablations(

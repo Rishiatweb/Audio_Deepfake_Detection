@@ -35,7 +35,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Train ConDetection-DANN")
     p.add_argument("--config", default="configs/default.yaml", help="Path to YAML config")
     p.add_argument("--epochs", type=int, default=None, help="Override epochs from config")
-    p.add_argument("--model", default="condetection", help="Model name (condetection/aasist/lcnn/rawnet2)")
+    p.add_argument("--model", default="condetection", help="Model name (condetection/aasist/lcnn)")
     p.add_argument("--for-base", default=None, help="Override FoR dataset root")
     p.add_argument("--itw-root", default=None, help="Override ITW dataset root")
     p.add_argument("--output-dir", default=None, help="Override output directory")
@@ -145,7 +145,7 @@ def main():
         ep_t0 = perf_counter()
         itw_iter = iter(itw_train_loader) if itw_train_loader else None
 
-        train_loss = train_one_epoch(
+        train_loss, _disc_acc = train_one_epoch(
             model, train_loader, optimizer, scheduler, scaler,
             criterion, device, cfg, epoch, itw_iter,
         )
