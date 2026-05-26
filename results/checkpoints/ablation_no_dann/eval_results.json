@@ -1,0 +1,1 @@
+{"name": "no_dann", "description": "No DANN (domain discriminator disabled)", "for_eer": 0.048123071073936596, "for_auc": 0.9908573330873255, "for_f1": 0.8149812734082397, "itw_eer": 0.2807814929861273, "itw_auc": 0.7818608043702786, "itw_f1": 0.22389048355045263, "gen_gap_eer": 0.23265842191219072, "disc_acc_final": NaN, "disc_acc_mean": NaN, "disc_acc_deviation": NaN}
