@@ -125,9 +125,32 @@ def source_balanced_cap(df: pd.DataFrame, n: int | None, seed: int = 42) -> pd.D
 
 
 def build_splits(cfg: Config) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Build train/val/for_test/itw DataFrames from config paths."""
-    dfs = build_for_dataframes(cfg.paths.for_base)
-    itw_df = build_itw_dataframe(cfg.paths.itw_root)
+    """Build train/val/for_test/itw DataFrames from config paths.
+
+    Caches the raw file scan to <output_dir>/file_cache.csv so repeated runs
+    (ablation × 5, CV × 5) skip the expensive rglob over 170K+ files.
+    """
+    cache_path = Path(cfg.paths.output_dir) / "file_cache.csv"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if cache_path.exists():
+        print(f"Loading file list from cache: {cache_path}")
+        all_rows = pd.read_csv(cache_path)
+        dfs: dict[str, list[dict]] = {}
+        for key, grp in all_rows[all_rows["source"] != "ITW"].groupby("source"):
+            dfs[str(key)] = grp.to_dict("records")
+        itw_df = all_rows[all_rows["source"] == "ITW"].reset_index(drop=True)
+    else:
+        print("Scanning dataset directories (first run — will cache result)...")
+        dfs = build_for_dataframes(cfg.paths.for_base)
+        itw_df = build_itw_dataframe(cfg.paths.itw_root)
+        # Save combined cache
+        for_rows: list[dict] = []
+        for rows in dfs.values():
+            for_rows.extend(rows)
+        all_rows = pd.concat([pd.DataFrame(for_rows), itw_df], ignore_index=True)
+        all_rows.to_csv(cache_path, index=False)
+        print(f"File list cached to {cache_path} ({len(all_rows):,} entries)")
 
     train_keys = ["for-original", "for-norm", "for-rerec", "for-2sec"]
     test_keys = ["for-original", "for-norm"]

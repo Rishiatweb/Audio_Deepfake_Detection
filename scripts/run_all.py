@@ -49,7 +49,7 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=None, help="Override training epochs")
     p.add_argument("--comparison-epochs", type=int, default=None, help="Override epochs for baseline comparison training")
     p.add_argument("--model", default="condetection",
-                   help="Model for CV (condetection/aasist/lcnn/rawnet2)")
+                   help="Model for CV (condetection/aasist/lcnn)")
     p.add_argument("--resume", action="store_true",
                    help="Resume training from existing checkpoint if present")
     return p.parse_args()

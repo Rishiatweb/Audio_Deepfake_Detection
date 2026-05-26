@@ -46,7 +46,7 @@ training:
   learning_rate: 0.0003
   epochs: 20
   patience: 8
-  num_workers: 4
+  num_workers: 0
   max_train_samples: 20000
   max_val_samples: 5000
   max_train_steps: 400

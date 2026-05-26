@@ -26,7 +26,7 @@ from src.training.trainer import (
     train_one_epoch,
 )
 
-BASELINE_MODELS = ["lcnn", "aasist", "rawnet2"]
+BASELINE_MODELS = ["lcnn", "aasist"]
 SKLEARN_MODELS = ["lr", "rf"]
 
 
@@ -172,19 +172,6 @@ def train_model(
 
     print(f"\nTraining {model_name.upper()} from scratch...")
 
-    # RawNet2 (22M params) needs smaller batch to fit 6GB VRAM
-    _SMALL_BATCH_MODELS = {"rawnet2"}
-    if model_name in _SMALL_BATCH_MODELS:
-        small_bs = 4
-        train_loader = torch.utils.data.DataLoader(
-            train_loader.dataset,
-            batch_size=small_bs,
-            shuffle=True,
-            num_workers=0,
-            drop_last=True,
-        )
-        print(f"  Reduced batch size to {small_bs} for VRAM headroom")
-
     n_real = sum(1 for lbl in train_loader.dataset.labels if lbl == 0.0)  # type: ignore[attr-defined]
     n_fake = sum(1 for lbl in train_loader.dataset.labels if lbl == 1.0)  # type: ignore[attr-defined]
     criterion = build_criterion(cfg, device, pos_weight_val=n_real / max(n_fake, 1))
@@ -200,9 +187,7 @@ def train_model(
     best_threshold = 0.5
     patience_cnt = 0
 
-    # RawNet2: batch=4 + grad_accum=4 → effective batch=16, same quality as batch=16
-    _ACCUM_MAP = {"rawnet2": 4}
-    grad_accum = _ACCUM_MAP.get(model_name, 1)
+    grad_accum = 1
 
     # DANN only for ConDetection; baselines train without domain adversarial loss
     use_dann_save = cfg.dann.enabled
@@ -212,7 +197,7 @@ def train_model(
     try:
         for epoch in range(1, cfg.training.epochs + 1):
             itw_iter = iter(itw_train_loader) if (itw_train_loader and cfg.dann.enabled) else None
-            train_one_epoch(model, train_loader, optimizer, scheduler, scaler, criterion, device, cfg, epoch, itw_iter, grad_accum=grad_accum)
+            _, _disc_acc = train_one_epoch(model, train_loader, optimizer, scheduler, scaler, criterion, device, cfg, epoch, itw_iter, grad_accum=grad_accum)
 
             max_val = cfg.training.max_val_steps
             val_raw = evaluate(model, val_loader, criterion, device, cfg, threshold=0.5, max_steps=max_val)

@@ -19,6 +19,8 @@ def parse_args():
     p.add_argument("--config", default="configs/default.yaml")
     p.add_argument("--ablations", nargs="+", default=None, help="Subset of ablation names to run")
     p.add_argument("--output", default=None, help="Output CSV path")
+    p.add_argument("--epochs", type=int, default=None, help="Override training epochs per variant")
+    p.add_argument("--patience", type=int, default=None, help="Override early stopping patience per variant")
     return p.parse_args()
 
 
@@ -26,6 +28,10 @@ def main():
     args = parse_args()
     cfg = load_config(args.config)
     cfg.make_dirs()
+    if args.epochs is not None:
+        cfg.training.epochs = args.epochs
+    if args.patience is not None:
+        cfg.training.patience = args.patience
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
