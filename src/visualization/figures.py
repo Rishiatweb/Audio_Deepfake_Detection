@@ -251,6 +251,222 @@ def plot_cross_scale_attention_heatmap(
         _save(fig, out_path)
 
 
+def plot_ablation_metrics_grouped(df: pd.DataFrame, out_path: str) -> None:
+    """Grouped bar chart: EER + AUC on FoR and ITW per ablation variant."""
+    with plt.rc_context(STYLE):
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        names = df["name"].tolist()
+        x = np.arange(len(names))
+        w = 0.35
+
+        highlight = "#2ca02c"
+        c_for = "#4C72B0"
+        c_itw = "#DD8452"
+        colors_for = [highlight if n == "full" else c_for for n in names]
+        colors_itw = [highlight if n == "full" else c_itw for n in names]
+
+        # EER (lower better)
+        ax = axes[0]
+        ax.bar(x - w / 2, df["for_eer"], w, label="FoR Test", color=colors_for, alpha=0.85)
+        ax.bar(x + w / 2, df["itw_eer"], w, label="In-the-Wild", color=colors_itw, alpha=0.85)
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=25, ha="right")
+        ax.set_ylabel("EER (lower is better)")
+        ax.set_title("Equal Error Rate per Ablation")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+
+        # AUC (higher better)
+        ax = axes[1]
+        ax.bar(x - w / 2, df["for_auc"], w, label="FoR Test", color=colors_for, alpha=0.85)
+        ax.bar(x + w / 2, df["itw_auc"], w, label="In-the-Wild", color=colors_itw, alpha=0.85)
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=25, ha="right")
+        ax.set_ylabel("AUC (higher is better)")
+        ax.set_title("Area Under ROC per Ablation")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(0.5, 1.02)
+
+        fig.suptitle("Ablation Study — EER & AUC Comparison", fontweight="bold", fontsize=14)
+        fig.tight_layout()
+        _save(fig, out_path)
+
+
+def plot_ablation_gen_gap(df: pd.DataFrame, out_path: str) -> None:
+    """Stacked bar: FoR EER (base) + generalization gap (delta) per ablation."""
+    with plt.rc_context(STYLE):
+        fig, ax = plt.subplots(figsize=(10, 5))
+        names = df["name"].tolist()
+        x = np.arange(len(names))
+
+        for_eers = df["for_eer"].to_numpy()
+        gaps = df["gen_gap_eer"].to_numpy()
+        colors_base = ["#2ca02c" if n == "full" else "#4C72B0" for n in names]
+
+        ax.bar(x, for_eers, label="FoR Test EER (in-domain)", color=colors_base, alpha=0.85)
+        ax.bar(x, gaps, bottom=for_eers, label="Generalization Gap (+ITW)", color="#DD8452", alpha=0.85)
+
+        # Value labels on top
+        for i, (fe, g) in enumerate(zip(for_eers, gaps)):
+            ax.text(i, fe + g + 0.005, f"{fe + g:.3f}", ha="center", va="bottom", fontsize=9)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=25, ha="right")
+        ax.set_ylabel("EER")
+        ax.set_title("Ablation — Generalization Gap (FoR → ITW)", fontweight="bold")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+        fig.tight_layout()
+        _save(fig, out_path)
+
+
+def plot_ablation_disc_acc(df: pd.DataFrame, out_path: str) -> None:
+    """Bar chart of domain discriminator accuracy deviation |disc_acc - 0.5| per ablation.
+
+    Lower = better DANN (discriminator at chance = domain-invariant features).
+    Variants without DANN (disc_acc=NaN) shown as hatched gray.
+    """
+    with plt.rc_context(STYLE):
+        fig, ax = plt.subplots(figsize=(9, 5))
+        names = df["name"].tolist()
+        x = np.arange(len(names))
+
+        deviations = df["disc_acc_deviation"].to_numpy()
+        disc_finals = df["disc_acc_final"].to_numpy()
+
+        colors = []
+        hatches = []
+        for i, n in enumerate(names):
+            if np.isnan(deviations[i]):
+                colors.append("#CCCCCC")
+                hatches.append("///")
+            elif n == "full":
+                colors.append("#2ca02c")
+                hatches.append("")
+            else:
+                colors.append("#4C72B0")
+                hatches.append("")
+
+        bars = ax.bar(x, [d if not np.isnan(d) else 0.0 for d in deviations],
+                       color=colors, alpha=0.85, edgecolor="black", linewidth=0.5)
+        for bar, h in zip(bars, hatches):
+            bar.set_hatch(h)
+
+        # Value labels
+        for i, (d, da) in enumerate(zip(deviations, disc_finals)):
+            if np.isnan(d):
+                ax.text(i, 0.01, "N/A\n(no DANN)", ha="center", va="bottom", fontsize=8, color="gray")
+            else:
+                ax.text(i, d + 0.003, f"|{da:.3f} − 0.5|\n= {d:.3f}", ha="center", va="bottom", fontsize=8)
+
+        ax.axhline(y=0.0, color="green", linestyle="--", alpha=0.5, label="Ideal (0.0 = perfect DANN)")
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=25, ha="right")
+        ax.set_ylabel("|disc_acc − 0.5| (lower = better)")
+        ax.set_title("Domain Discriminator Accuracy Deviation per Ablation", fontweight="bold")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+        fig.tight_layout()
+        _save(fig, out_path)
+
+
+def plot_ablation_f1_comparison(df: pd.DataFrame, out_path: str) -> None:
+    """Grouped bar: F1 score on FoR vs ITW per ablation."""
+    with plt.rc_context(STYLE):
+        fig, ax = plt.subplots(figsize=(10, 5))
+        names = df["name"].tolist()
+        x = np.arange(len(names))
+        w = 0.35
+
+        highlight = "#2ca02c"
+        c_for = "#4C72B0"
+        c_itw = "#DD8452"
+        colors_for = [highlight if n == "full" else c_for for n in names]
+        colors_itw = [highlight if n == "full" else c_itw for n in names]
+
+        ax.bar(x - w / 2, df["for_f1"], w, label="FoR Test", color=colors_for, alpha=0.85)
+        ax.bar(x + w / 2, df["itw_f1"], w, label="In-the-Wild", color=colors_itw, alpha=0.85)
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=25, ha="right")
+        ax.set_ylabel("F1 Score")
+        ax.set_title("Ablation — F1 Score Comparison", fontweight="bold")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(0, 1.05)
+        fig.tight_layout()
+        _save(fig, out_path)
+
+
+def plot_ablation_radar(df: pd.DataFrame, out_path: str) -> None:
+    """Radar/spider chart comparing ablation variants across key metrics."""
+    with plt.rc_context(STYLE):
+        metrics = ["for_eer", "itw_eer", "for_auc", "itw_auc", "for_f1", "itw_f1"]
+        metric_labels = ["FoR EER↓", "ITW EER↓", "FoR AUC↑", "ITW AUC↑", "FoR F1↑", "ITW F1↑"]
+
+        # Normalize: for EER (lower=better) invert, for AUC/F1 keep as-is
+        names = df["name"].tolist()
+        n_metrics = len(metrics)
+        angles = np.linspace(0, 2 * np.pi, n_metrics, endpoint=False).tolist()
+        angles += angles[:1]
+
+        fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+        colors = plt.cm.Set2(np.linspace(0, 0.8, len(names)))
+
+        for idx, (_, row) in enumerate(df.iterrows()):
+            values = []
+            for m in metrics:
+                v = row[m]
+                if "eer" in m:
+                    values.append(1.0 - v)  # invert EER so higher = better
+                else:
+                    values.append(v)
+            values += values[:1]
+            lw = 3 if row["name"] == "full" else 1.5
+            ax.plot(angles, values, "o-", linewidth=lw, label=row["name"], color=colors[idx])
+            ax.fill(angles, values, alpha=0.08, color=colors[idx])
+
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(metric_labels, fontsize=10)
+        ax.set_ylim(0, 1.05)
+        ax.set_title("Ablation — Multi-Metric Radar", fontweight="bold", pad=20)
+        ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
+        fig.tight_layout()
+        _save(fig, out_path)
+
+
+def plot_ablation_heatmap(df: pd.DataFrame, out_path: str) -> None:
+    """Heatmap of all ablation metrics — quick visual overview."""
+    with plt.rc_context(STYLE):
+        cols = ["for_eer", "itw_eer", "for_auc", "itw_auc", "for_f1", "itw_f1", "gen_gap_eer"]
+        labels = ["FoR EER↓", "ITW EER↓", "FoR AUC↑", "ITW AUC↑", "FoR F1↑", "ITW F1↑", "Gen Gap↓"]
+        data = df[cols].to_numpy().astype(float)
+        names = df["name"].tolist()
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        im = ax.imshow(data, cmap="RdYlGn_r", aspect="auto")
+        fig.colorbar(im, ax=ax, fraction=0.03, pad=0.04)
+
+        ax.set_xticks(range(len(labels)))
+        ax.set_yticks(range(len(names)))
+        ax.set_xticklabels(labels, rotation=30, ha="right")
+        ax.set_yticklabels(names)
+
+        for i in range(len(names)):
+            for j in range(len(labels)):
+                val = data[i, j]
+                if np.isnan(val):
+                    txt = "N/A"
+                else:
+                    txt = f"{val:.3f}"
+                ax.text(j, i, txt, ha="center", va="center", fontsize=9,
+                        color="white" if val > 0.5 else "black")
+
+        ax.set_title("Ablation Metrics Heatmap", fontweight="bold")
+        fig.tight_layout()
+        _save(fig, out_path)
+
+
 def plot_generalization_gap(
     model_results: dict[str, tuple[float, float]],
     out_path: str,
